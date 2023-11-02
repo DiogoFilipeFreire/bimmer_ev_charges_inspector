@@ -5,11 +5,18 @@ import pandas as pd
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(script_dir)
-charges_file_paths = glob.glob(os.path.join(parent_dir, 'data', 'EV charges', '*.xlsx'))
-emissions_file_path = glob.glob(os.path.join(parent_dir, 'data','CO2 data', '*.csv'))
+charges_file_paths = glob.glob(os.path.join(parent_dir, 'data', 'EV_charges', '*.xlsx'))
+emissions_file_path = glob.glob(os.path.join(parent_dir, 'data','CO2_data', '*.csv'))
 files_not_processed = []
 print(f"\nScript directory: {script_dir}")
-print(f"\n_________________________________________________________________\n\nList of file paths:\n{charges_file_paths}")
+print("\n_________________________________________________________________\n")
+print("List of file paths for charges:\n")
+for file_path in charges_file_paths:
+    print(file_path)
+print("\n_________________________________________________________________\n")
+print("List of file paths for CO2 emissions:\n")
+for file_path in emissions_file_path:
+    print(file_path)
 
 def charges_file_opener(file_paths):
     month_dfs = []
@@ -34,7 +41,8 @@ def charges_file_opener(file_paths):
             print(f"!!!Error processing file: {file}. Error: {e}\n")
             files_not_processed.append(file)
             continue
-    print(f"File(s) not processed: {files_not_processed}")
+    if len(files_not_processed) > 0:
+        print(f"File(s) not processed: {files_not_processed}")
     complete_df = pd.concat(month_dfs)
     return complete_df
 
@@ -54,7 +62,8 @@ def emissions_file_opener(file_path):
             print(f"!!!Error processing file: {file}. Error: {e}\n")
             files_not_processed.append(file)
             continue
-    print(f"File(s) not processed: {files_not_processed}")
+    if len(files_not_processed) > 0:
+        print(f"File(s) not processed: {files_not_processed}")
     complete_df = pd.concat(emissions_dfs)
     return complete_df
 
