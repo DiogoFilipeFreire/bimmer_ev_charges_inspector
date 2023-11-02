@@ -2,6 +2,7 @@ import os
 import glob
 import numpy as np
 import pandas as pd
+from pandas import Timedelta
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(script_dir)
@@ -86,18 +87,17 @@ def charges_df_cleaning(df, anonym=True):
     else:
         print("Number of columns doesn't match, please review the imported files.")
     df['charge_start_time'] = pd.to_datetime(df['charge_start_time'], dayfirst=True)
-    df['km_mileage'] = df['km_mileage'].str.findall('(\d+)').str.join('').astype(int)
     df['charge_end_time'] = pd.to_datetime(df['charge_end_time'], dayfirst=True)
+    incorrect_time_mask = df['charge_start_time'] > df['charge_end_time']
+    df.loc[incorrect_time_mask, ['charge_start_time', 'charge_end_time']] = df.loc[incorrect_time_mask, ['charge_end_time', 'charge_start_time']].values
+    df['km_mileage'] = df['km_mileage'].str.findall('(\d+)').str.join('').astype(int)
     df = df.drop(['local'], axis=1)
     df['kwh'] = df['kwh'].str.extract('(\d+)')[0].astype(float)
     if not df['electricity_price1'].str.contains(r'\d').any():
         df = df.drop(['charge_costs', 'electricity_price1'], axis=1)
     if not df['electricity_price2'].str.contains(r'\d').any():
         df = df.drop('electricity_price2', axis=1)
-    df['hours'] = [int(x.split('h')[0]) if 'h' in str(x) else 0 for x in df['charge_duration_min']]
-    df['minutes'] = [int(x.split('min')[0].split()[-1]) if 'min' in str(x) else 0 for x in df['charge_duration_min']]
-    df['charge_duration_min'] = df['hours'] * 60 + df['minutes']
-    df.drop(['hours', 'minutes'], axis=1, inplace=True)
+    df['charge_duration_min'] = (df['charge_end_time'] - df['charge_start_time']).dt.total_seconds() / 60
     if anonym:
         df.drop(['address'], axis=1, inplace=True)
     return df
@@ -129,44 +129,74 @@ def display_df_info(df):
 def calculate_direct_emissions(charge_row, co2_df):
     start_time = charge_row['charge_start_time']
     end_time = charge_row['charge_end_time']
-    charge_rate = charge_row['charge_rate']
-    
-    mask = (co2_df['Datetime (UTC)'] >= start_time) & (co2_df['Datetime (UTC)'] <= end_time)
+    charge_start_hour = start_time.replace(minute=0, second=0, microsecond=0)
+
+    mask = (co2_df['Datetime (UTC)'] >= start_time) & (co2_df['Datetime (UTC)'] < end_time)
     relevant_co2_data = co2_df[mask]
+
+    duration = end_time - start_time
+    
+    if relevant_co2_data.empty:
+        print(f"No relevant CO2 data found for charge between {start_time} and {end_time}")
     
     total_emissions = 0.0
     
-    for i, row in relevant_co2_data.iterrows():
-        co2_time_start = row['Datetime (UTC)']
-        co2_time_end = co2_time_start + pd.Timedelta(hours=1)
-        overlap_start = max(start_time, co2_time_start)
-        overlap_end = min(end_time, co2_time_end)
-        overlap_minutes = (overlap_end - overlap_start).seconds / 60.0
-        emissions = charge_rate * (overlap_minutes / 60.0) * row['Carbon Intensity gCO₂eq/kWh (direct)']
+    if duration > Timedelta(hours=1):
+        for i, row in relevant_co2_data.iterrows():
+            co2_time_start = row['Datetime (UTC)']
+            co2_time_end = co2_time_start + pd.Timedelta(hours=1)
+            charge_rate = charge_row['charge_rate']
+            
+            overlap_start = max(start_time, co2_time_start)
+            overlap_end = min(end_time, co2_time_end)
+            overlap_minutes = (overlap_end - overlap_start).total_seconds() / 3600.0
+            
+            emissions = charge_rate * overlap_minutes * row['Carbon Intensity gCO₂eq/kWh (direct)']
         
-        total_emissions += emissions
+            total_emissions += emissions
+    else:
+        charge_duration_hours = duration.total_seconds() / 3600.0
+        carbon_intensity_row = co2_df[co2_df['Datetime (UTC)'] == charge_start_hour]
+        carbon_intensity = carbon_intensity_row['Carbon Intensity gCO₂eq/kWh (direct)'].iloc[0] if not carbon_intensity_row.empty else 0
+        charge_rate = charge_row['charge_rate']
+        total_emissions = charge_rate * charge_duration_hours * carbon_intensity
     
     return total_emissions
 
 def calculate_lca_emissions(charge_row, co2_df):
     start_time = charge_row['charge_start_time']
     end_time = charge_row['charge_end_time']
-    charge_rate = charge_row['charge_rate']
-    
-    mask = (co2_df['Datetime (UTC)'] >= start_time) & (co2_df['Datetime (UTC)'] <= end_time)
+    charge_start_hour = start_time.replace(minute=0, second=0, microsecond=0)
+
+    mask = (co2_df['Datetime (UTC)'] >= start_time) & (co2_df['Datetime (UTC)'] < end_time)
     relevant_co2_data = co2_df[mask]
+
+    duration = end_time - start_time
+    
+    if relevant_co2_data.empty:
+        print(f"No relevant CO2 data found for charge between {start_time} and {end_time}")
     
     total_emissions = 0.0
     
-    for i, row in relevant_co2_data.iterrows():
-        co2_time_start = row['Datetime (UTC)']
-        co2_time_end = co2_time_start + pd.Timedelta(hours=1)
-        overlap_start = max(start_time, co2_time_start)
-        overlap_end = min(end_time, co2_time_end)
-        overlap_minutes = (overlap_end - overlap_start).seconds / 60.0
-        emissions = charge_rate * (overlap_minutes / 60.0) * row['Carbon Intensity gCO₂eq/kWh (LCA)']
+    if duration > Timedelta(hours=1):
+        for i, row in relevant_co2_data.iterrows():
+            co2_time_start = row['Datetime (UTC)']
+            co2_time_end = co2_time_start + pd.Timedelta(hours=1)
+            charge_rate = charge_row['charge_rate']
+            
+            overlap_start = max(start_time, co2_time_start)
+            overlap_end = min(end_time, co2_time_end)
+            overlap_minutes = (overlap_end - overlap_start).total_seconds() / 3600.0
+            
+            emissions = charge_rate * overlap_minutes * row['Carbon Intensity gCO₂eq/kWh (LCA)']
         
-        total_emissions += emissions
+            total_emissions += emissions
+    else:
+        charge_duration_hours = duration.total_seconds() / 3600.0
+        carbon_intensity_row = co2_df[co2_df['Datetime (UTC)'] == charge_start_hour]
+        carbon_intensity = carbon_intensity_row['Carbon Intensity gCO₂eq/kWh (LCA)'].iloc[0] if not carbon_intensity_row.empty else 0
+        charge_rate = charge_row['charge_rate']
+        total_emissions = charge_rate * charge_duration_hours * carbon_intensity
     
     return total_emissions
 
@@ -178,7 +208,10 @@ if __name__ == "__main__":
     print("Charges Datframe information :\n")
     charges_df = charges_file_opener(charges_file_paths)
     charges_df = charges_df_cleaning(charges_df)
+    charges_df = charges_df[charges_df['charge_start_time'].dt.year == 2022]
     charges_df['charge_rate'] = charges_df['kwh'] / (charges_df['charge_duration_min'] / 60)
     charges_df['co2_direct_emissions'] = charges_df.apply(lambda row: calculate_direct_emissions(row, co2_df), axis=1)
     charges_df['co2_lca_emissions'] = charges_df.apply(lambda row: calculate_lca_emissions(row, co2_df), axis=1)
     display_df_info(charges_df)
+    charges_df = charges_df.sort_values(by='charge_start_time')
+    charges_df.to_csv('charges_data.csv', index=True)
